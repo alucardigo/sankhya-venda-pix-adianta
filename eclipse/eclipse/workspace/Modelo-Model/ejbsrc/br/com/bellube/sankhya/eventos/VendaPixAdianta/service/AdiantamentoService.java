@@ -92,7 +92,7 @@ public class AdiantamentoService {
         try {
             jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
-            ps = jdbc.getPreparedStatement("SELECT CODTIPVENDA, CODTIPOPER FROM TGFCAB WHERE NUNOTA = ?");
+            ps = jdbc.getPreparedStatement("SELECT CODTIPVENDA, CODTIPOPER FROM TGFCAB WITH (NOLOCK) WHERE NUNOTA = ?");
             ps.setBigDecimal(1, nunota);
             rs = ps.executeQuery();
             if (!rs.next()) return false;

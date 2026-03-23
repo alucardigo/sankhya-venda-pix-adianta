@@ -76,9 +76,23 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
      * 2) Existencia real de adiantamento na TGFFIN com AD_NUNOTAADIANT (checagem por dado concreto)
      *
      * A estrategia 2 eh o fallback critico que resolve o bug de faturamento parcial.
+     *
+     * OTIMIZACAO: Estrategia 2 roda primeiro por ser uma unica query leve com NOLOCK.
+     * Estrategia 1 so roda se a 2 falhar (evita N queries JDBC separadas).
      */
     private boolean contextoEhAdiantamentoPIX(BigDecimal nunotaBase, Set<BigDecimal> candidatos) {
-        // Estrategia 1: verificar flags AD_GERAADIANT nas notas relacionadas
+        // Estrategia 2 PRIMEIRO (mais rapida): verificar se existe adiantamento REAL na TGFFIN
+        // Uma unica query com NOLOCK em vez de N queries separadas para cada nota
+        try {
+            if (existeAdiantamentoNaFinanceiro(candidatos)) {
+                LOGGER.info("[RegraBaixaAdiantamento] Contexto PIX detectado via TGFFIN (adiantamento real existe) para NUNOTA=" + nunotaBase);
+                return true;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[RegraBaixaAdiantamento] Erro ao checar adiantamento na TGFFIN para NUNOTA=" + nunotaBase, e);
+        }
+
+        // Estrategia 1 (fallback): verificar flags AD_GERAADIANT nas notas relacionadas
         for (BigDecimal n : candidatos) {
             if (n == null) continue;
             try {
@@ -91,17 +105,6 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             }
         }
 
-        // Estrategia 2 (FALLBACK CRITICO): verificar se existe adiantamento REAL na TGFFIN
-        // Isso cobre o caso de faturamento parcial onde o CODTIPOPER muda e as flags nao batem mais
-        try {
-            if (existeAdiantamentoNaFinanceiro(candidatos)) {
-                LOGGER.info("[RegraBaixaAdiantamento] Contexto PIX detectado via TGFFIN (adiantamento real existe) para NUNOTA=" + nunotaBase);
-                return true;
-            }
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "[RegraBaixaAdiantamento] Erro ao checar adiantamento na TGFFIN para NUNOTA=" + nunotaBase, e);
-        }
-
         return false;
     }
 
@@ -109,6 +112,10 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
      * Verifica se existe pelo menos um registro de adiantamento na TGFFIN
      * vinculado a qualquer uma das NUNOTAs relacionadas.
      * Isso detecta adiantamentos independente do CODTIPOPER atual da nota.
+     */
+    /**
+     * OTIMIZADO: Adicionado WITH (NOLOCK) para evitar bloqueio por transacoes concorrentes.
+     * Isso eliminava o timeout de 73s quando TGFFIN estava sob lock de outras operacoes.
      */
     private boolean existeAdiantamentoNaFinanceiro(Set<BigDecimal> nunotas) throws Exception {
         if (nunotas == null || nunotas.isEmpty()) return false;
@@ -120,7 +127,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             jdbc.openSession();
             List<BigDecimal> lista = new ArrayList<>(nunotas);
             StringBuilder sql = new StringBuilder(
-                    "SELECT TOP 1 1 FROM TGFFIN WHERE AD_NUNOTAADIANT IN (");
+                    "SELECT TOP 1 1 FROM TGFFIN WITH (NOLOCK) WHERE AD_NUNOTAADIANT IN (");
             for (int i = 0; i < lista.size(); i++) {
                 if (i > 0) sql.append(',');
                 sql.append('?');
@@ -151,7 +158,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             jdbc.openSession();
             List<BigDecimal> lista = new ArrayList<>(nunotas);
             StringBuilder sql = new StringBuilder(
-                    "SELECT TOP 1 1 FROM TGFFIN WHERE AD_NUNOTAADIANT IN (");
+                    "SELECT TOP 1 1 FROM TGFFIN WITH (NOLOCK) WHERE AD_NUNOTAADIANT IN (");
             for (int i = 0; i < lista.size(); i++) {
                 if (i > 0) sql.append(',');
                 sql.append('?');
@@ -184,7 +191,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             jdbc = EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
             ps = jdbc.getPreparedStatement(
-                    "SELECT DISTINCT NUNOTA, NUNOTAORIG FROM TGFVAR WHERE NUNOTA = ? OR NUNOTAORIG = ?");
+                    "SELECT DISTINCT NUNOTA, NUNOTAORIG FROM TGFVAR WITH (NOLOCK) WHERE NUNOTA = ? OR NUNOTAORIG = ?");
             ps.setBigDecimal(1, nunotaBase);
             ps.setBigDecimal(2, nunotaBase);
             rs = ps.executeQuery();
@@ -214,7 +221,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             jdbc.openSession();
 
             // Query 1: obter CODTIPVENDA e CODTIPOPER da nota
-            ps = jdbc.getPreparedStatement("SELECT CODTIPVENDA, CODTIPOPER FROM TGFCAB WHERE NUNOTA = ?");
+            ps = jdbc.getPreparedStatement("SELECT CODTIPVENDA, CODTIPOPER FROM TGFCAB WITH (NOLOCK) WHERE NUNOTA = ?");
             ps.setBigDecimal(1, nunota);
             rs = ps.executeQuery();
 
@@ -232,7 +239,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             // Query 2: checar AD_GERAADIANT na TGFTPV
             boolean geraPorTpv = false;
             ps = jdbc.getPreparedStatement(
-                    "SELECT TOP 1 AD_GERAADIANT FROM TGFTPV WHERE CODTIPVENDA = ? ORDER BY DHALTER DESC");
+                    "SELECT TOP 1 AD_GERAADIANT FROM TGFTPV WITH (NOLOCK) WHERE CODTIPVENDA = ? ORDER BY DHALTER DESC");
             ps.setBigDecimal(1, codTipVenda);
             rs = ps.executeQuery();
             if (rs.next()) {
@@ -247,7 +254,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
             // Query 3: checar AD_GERAADIANT na TGFTOP
             boolean geraPorTop = false;
             ps = jdbc.getPreparedStatement(
-                    "SELECT TOP 1 AD_GERAADIANT FROM TGFTOP WHERE CODTIPOPER = ? ORDER BY DHALTER DESC");
+                    "SELECT TOP 1 AD_GERAADIANT FROM TGFTOP WITH (NOLOCK) WHERE CODTIPOPER = ? ORDER BY DHALTER DESC");
             ps.setBigDecimal(1, codTipOper);
             rs = ps.executeQuery();
             if (rs.next()) {
@@ -268,7 +275,7 @@ public class RegraBaixaAdiantamentoConfirmacao implements RegraNegocioJava {
         try {
             jdbc = EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
-            ps = jdbc.getPreparedStatement("SELECT CODPARC FROM TGFCAB WHERE NUNOTA = ?");
+            ps = jdbc.getPreparedStatement("SELECT CODPARC FROM TGFCAB WITH (NOLOCK) WHERE NUNOTA = ?");
             ps.setBigDecimal(1, nunota);
             rs = ps.executeQuery();
             if (rs.next()) {

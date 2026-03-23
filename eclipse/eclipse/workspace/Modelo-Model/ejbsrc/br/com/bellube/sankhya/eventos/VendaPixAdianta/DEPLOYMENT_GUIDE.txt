@@ -1,0 +1,206 @@
+# VendaPixAdianta - Deployment Guide
+
+## Overview
+
+The VendaPixAdianta module is a complete, production-grade Java solution for the Sankhya ERP platform that automates the creation of financial advances ("Adiantamento/Empréstimo") when PIX sales orders are inserted.
+
+## Architecture Summary
+
+The implementation follows four core architectural principles:
+
+1. **Asynchronous Execution**: Uses ExecutorService and BlockingQueue for decoupled processing
+2. **Service Invocation**: Uses JAPE APIs following service-oriented principles
+3. **Zero Hardcoding**: All configuration via TSIPAR system parameters
+4. **Comprehensive Auditing**: All operations logged to AD_LOGVENDAPIXADI table
+
+## Required Classes
+
+The module consists of 6 Java classes in the exact package structure specified:
+
+```
+br.com.bellube.sankhya.eventos.VendaPixAdianta/
+├── async/
+│   ├── AdiantamentoTask.java          # Immutable DTO
+│   └── AsyncAdiantamentoProcessor.java # Singleton processor
+├── event/
+│   └── VendaPixAdiantaEvent.java      # EventoProgramavelJava implementation
+├── service/
+│   └── AdiantamentoService.java       # Core business logic
+└── util/
+    ├── AuditLogger.java              # Audit table logging
+    └── ConfiguracaoHelper.java       # TSIPAR parameter access
+```
+
+## Database Setup
+
+### 1. Create Audit Table
+
+Execute this SQL script to create the audit log table:
+
+```sql
+CREATE TABLE AD_LOGVENDAPIXADI (
+    NUNOTA NUMERIC(10) NOT NULL,
+    DHEXEC TIMESTAMP NOT NULL,
+    STATUS VARCHAR(10) NOT NULL, -- 'SUCCESS' OR 'ERROR'
+    MENSAGEM VARCHAR(4000),
+    STACKTRACE CLOB,
+    CONSTRAINT PK_AD_LOGVENDAPIXADI PRIMARY KEY (NUNOTA)
+);
+
+-- Add comments for documentation
+COMMENT ON TABLE AD_LOGVENDAPIXADI IS 'Log de auditoria para processamento de adiantamentos PIX';
+COMMENT ON COLUMN AD_LOGVENDAPIXADI.NUNOTA IS 'Número único da nota de venda';
+COMMENT ON COLUMN AD_LOGVENDAPIXADI.DHEXEC IS 'Data/hora da execução';
+COMMENT ON COLUMN AD_LOGVENDAPIXADI.STATUS IS 'Status: SUCCESS ou ERROR';
+COMMENT ON COLUMN AD_LOGVENDAPIXADI.MENSAGEM IS 'Mensagem de resultado ou erro';
+COMMENT ON COLUMN AD_LOGVENDAPIXADI.STACKTRACE IS 'Stack trace completo em caso de erro';
+```
+
+## System Parameters Configuration
+
+Configure the following parameters in TSIPAR:
+
+### Required Parameters
+
+| Parameter Key | Type | Description | Example Value |
+|---------------|------|-------------|---------------|
+| `PIXVENDA.EVENTO` | LOGICO | Master switch ('S'/'N') to enable/disable automation | S |
+| `PIXVENDA.TIPPIX` | INTEIRO | CODTIPTIT that identifies PIX sales | 17 |
+| `PIXVENDA.CODTOP` | INTEIRO | Default CODTIPOPER for advances | 501 |
+| `PIXVENDA.CODNAT` | INTEIRO | Default CODNAT for advances | 10101 |
+| `PIXVENDA.TIPTIT` | INTEIRO | Default CODTIPTIT for advances | 999 |
+| `PIXVENDA.CTABCO` | INTEIRO | Default bank account code | 1 |
+| `PIXVENDA.DIASVENC` | INTEIRO | Days to add to DTNEG for due date calculation | 30 |
+
+### Optional Parameters
+
+| Parameter Key | Type | Description | Default Behavior |
+|---------------|------|-------------|------------------|
+| `PIXVENDA.CENCUS` | INTEIRO | Default cost center if not present on sale | Uses sale's cost center |
+| `PIXVENDA.PROJ` | INTEIRO | Default project code | 0 |
+
+### Parameter Configuration SQL
+
+```sql
+-- Required parameters
+INSERT INTO TSIPAR (CHAVE, LOGICO, DESCRICAO, TIPO) VALUES ('PIXVENDA.EVENTO', 'S', 'Ativa/Desativa o evento de venda PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.TIPPIX', 17, 'Código do tipo de título PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.CODTOP', 501, 'Código da TOP para venda PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.CODNAT', 10101, 'Código da natureza para venda PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.TIPTIT', 999, 'Código do tipo de título para adiantamento', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.CTABCO', 1, 'Código da conta bancária para PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.DIASVENC', 30, 'Dias para vencimento do PIX', 'I');
+
+-- Optional parameters
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.CENCUS', 1001, 'Centro de custo para venda PIX', 'I');
+INSERT INTO TSIPAR (CHAVE, INTEIRO, DESCRICAO, TIPO) VALUES ('PIXVENDA.PROJ', 0, 'Código do projeto para venda PIX', 'I');
+```
+
+## Event Configuration
+
+Register the event handler in Sankhya:
+
+1. Go to **System > Events > Programmable Events**
+2. Create a new event with:
+   - **Entity**: `CabecalhoNota`
+   - **Event Type**: `afterInsert`
+   - **Java Class**: `br.com.bellube.sankhya.eventos.VendaPixAdianta.event.VendaPixAdiantaEvent`
+   - **Active**: Yes
+
+## Deployment Steps
+
+1. **Compile and Deploy Classes**:
+   - Compile all 6 Java classes
+   - Deploy to Sankhya server's classpath
+
+2. **Execute Database Scripts**:
+   - Create the audit table `AD_LOGVENDAPIXADI`
+   - Configure TSIPAR parameters
+
+3. **Register Event Handler**:
+   - Configure the programmable event as described above
+
+4. **Validate Configuration**:
+   - Check that all TSIPAR parameters are correctly set
+   - Verify event handler is registered and active
+
+5. **Test Implementation**:
+   - Create a test PIX sale
+   - Monitor AD_LOGVENDAPIXADI for results
+   - Verify financial advance is created correctly
+
+## Monitoring and Troubleshooting
+
+### Success Monitoring
+
+Check the audit table for successful operations:
+
+```sql
+SELECT * FROM AD_LOGVENDAPIXADI 
+WHERE STATUS = 'SUCCESS' 
+ORDER BY DHEXEC DESC;
+```
+
+### Error Monitoring
+
+Check for errors and their details:
+
+```sql
+SELECT NUNOTA, DHEXEC, MENSAGEM, STACKTRACE 
+FROM AD_LOGVENDAPIXADI 
+WHERE STATUS = 'ERROR' 
+ORDER BY DHEXEC DESC;
+```
+
+### Common Issues
+
+1. **No Processing Occurring**:
+   - Check `PIXVENDA.EVENTO` is set to 'S'
+   - Verify event handler is registered correctly
+   - Check application logs for event execution
+
+2. **PIX Sales Not Detected**:
+   - Verify `PIXVENDA.TIPPIX` matches actual PIX sales CODTIPTIT
+   - Check that PIX sales have the correct CODTIPTIT value
+
+3. **Financial Advance Creation Failures**:
+   - Check error messages in AD_LOGVENDAPIXADI
+   - Verify all required TSIPAR parameters are configured
+   - Ensure referenced codes (TOP, Natureza, etc.) are active in the system
+
+### Performance Monitoring
+
+The async processor uses 3 worker threads by default. Monitor system performance and adjust if needed by modifying `NUM_THREADS` constant in `AsyncAdiantamentoProcessor.java`.
+
+### Cache Management
+
+The configuration cache can be cleared programmatically if needed:
+
+```java
+ConfiguracaoHelper.clearCache();
+```
+
+This is useful when TSIPAR parameters are updated and need to be reloaded without system restart.
+
+## Maintenance
+
+### Regular Tasks
+
+1. **Monitor Audit Table Growth**: Archive or purge old AD_LOGVENDAPIXADI records periodically
+2. **Review Error Logs**: Regularly check for and resolve any recurring errors
+3. **Parameter Updates**: Use cache clearing when updating TSIPAR configuration
+
+### System Integration
+
+The module integrates seamlessly with Sankhya's native financial processes:
+- Uses JAPE for database operations
+- Follows Sankhya's validation patterns
+- Respects existing financial business rules
+- Maintains data consistency with the ERP core
+
+## Security Considerations
+
+- All database operations are performed within JAPE's security context
+- No direct SQL manipulation outside of JAPE framework
+- Event execution respects user permissions and transaction boundaries
+- Configuration parameters are secured through TSIPAR access controls

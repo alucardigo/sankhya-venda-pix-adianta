@@ -120,7 +120,7 @@ public class LimiteControleHelper {
 
             // Buscar limite de liberação na tabela de parceiros (assumindo campo LIMLIB ou similar)
             // Nota: O nome do campo pode variar dependendo da configuração do Sankhya
-            String sql = "SELECT LIMCRED as LIMITE_LIBERACAO FROM TGFPAR " +
+            String sql = "SELECT LIMCRED as LIMITE_LIBERACAO FROM TGFPAR WITH (NOLOCK) " +
                         "WHERE CODPARC = ? AND LIMCRED IS NOT NULL AND LIMCRED > 0";
 
             stmt = jdbc.getPreparedStatement(sql);

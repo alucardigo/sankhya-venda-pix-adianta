@@ -127,16 +127,28 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
         boolean mudouParaNaoPendente = !"N".equals(pendenteAnterior) && "N".equals(pendenteAtual);
         if (!mudouParaNaoPendente) return false;
 
-        if (!isPixConfirmado(cabVO)) {
-            LOGGER.info("[VendaPixAdianta] Nota nao qualifica para PIX ao mudar PENDENTE=N - NUNOTA=" + nunota);
+        // CORRECAO: Verificar SEMPRE se existem adiantamentos reais na TGFFIN,
+        // independente de a nota qualificar como PIX por flags.
+        // Isso cobre notas parcialmente faturadas onde CODTIPOPER/CODTIPVENDA mudaram.
+        boolean possuiAdiantamentosReais = CancelamentoHelper.possuiAdiantamentosRelacionadosComVAR(nunota);
+
+        if (!possuiAdiantamentosReais) {
+            // Sem adiantamentos vinculados - nada a cancelar
+            if (!isPixConfirmado(cabVO)) {
+                LOGGER.fine("[VendaPixAdianta] Nota nao qualifica para PIX e sem adiantamentos ao mudar PENDENTE=N - NUNOTA=" + nunota);
+            } else {
+                LOGGER.info("[VendaPixAdianta] Nota PIX sem adiantamentos ao mudar PENDENTE=N - NUNOTA=" + nunota);
+            }
             return true;
         }
 
+        // Tem adiantamentos reais - verificar se deve cancelar
         boolean existeLigacaoVar = CancelamentoHelper.existeLigacaoVarPorNunotaOrig(nunota);
         if (!existeLigacaoVar) {
+            LOGGER.info("[VendaPixAdianta] Cancelando adiantamentos (PENDENTE=N sem vinculo TGFVAR) - NUNOTA=" + nunota);
             cancelarAdiantamentosSemVinculo(nunota, "ausencia vinculo TGFVAR ao mudar PENDENTE=N");
         } else {
-            LOGGER.info("[VendaPixAdianta] Vinculo TGFVAR encontrado para NUNOTAORIG=" + nunota);
+            LOGGER.info("[VendaPixAdianta] Vinculo TGFVAR encontrado para NUNOTAORIG=" + nunota + " - adiantamentos mantidos");
         }
         return true;
     }
@@ -202,7 +214,7 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
             java.util.List<BigDecimal> lista = new java.util.ArrayList<>(relacionados);
 
             StringBuilder sql = new StringBuilder(
-                    "SELECT COUNT(1) AS TOTAL FROM TGFFIN WHERE RECDESP = 1 AND PROVISAO = 'N' AND AD_NUNOTAADIANT IN (");
+                    "SELECT COUNT(1) AS TOTAL FROM TGFFIN WITH (NOLOCK) WHERE RECDESP = 1 AND PROVISAO = 'N' AND AD_NUNOTAADIANT IN (");
             for (int i = 0; i < lista.size(); i++) {
                 if (i > 0) sql.append(',');
                 sql.append('?');
@@ -244,7 +256,7 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
         try {
             jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
-            ps = jdbc.getPreparedStatement("SELECT DISTINCT NUNOTA, NUNOTAORIG FROM TGFVAR WHERE NUNOTA = ? OR NUNOTAORIG = ?");
+            ps = jdbc.getPreparedStatement("SELECT DISTINCT NUNOTA, NUNOTAORIG FROM TGFVAR WITH (NOLOCK) WHERE NUNOTA = ? OR NUNOTAORIG = ?");
             ps.setBigDecimal(1, nunotaBase);
             ps.setBigDecimal(2, nunotaBase);
             rs = ps.executeQuery();

@@ -53,6 +53,46 @@ public class CancelamentoHelper {
         return !buscarAdiantamentosRelacionados(nunota).isEmpty();
     }
 
+    /**
+     * Verifica se existem adiantamentos vinculados a esta NUNOTA ou a qualquer
+     * NUNOTA relacionada via TGFVAR (ex: nota original de faturamento parcial).
+     * CORRECAO: Resolve o bug onde PENDENTE=N nao cancelava adiantamentos porque
+     * o AD_NUNOTAADIANT aponta para a nota ORIGINAL, nao para a nota faturada.
+     */
+    public static boolean possuiAdiantamentosRelacionadosComVAR(BigDecimal nunota) {
+        if (nunota == null) return false;
+
+        br.com.sankhya.jape.dao.JdbcWrapper jdbc = null;
+        PreparedStatement stmt = null;
+        ResultSet rs = null;
+        try {
+            jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
+            jdbc.openSession();
+            // Busca adiantamentos vinculados a esta NUNOTA OU a NUNOTAs relacionadas via TGFVAR
+            stmt = jdbc.getPreparedStatement(
+                    "SELECT TOP 1 1 FROM TGFFIN WITH (NOLOCK) "
+                  + "WHERE AD_NUNOTAADIANT IN ("
+                  + "  SELECT ? "
+                  + "  UNION "
+                  + "  SELECT NUNOTA FROM TGFVAR WITH (NOLOCK) WHERE NUNOTAORIG = ? "
+                  + "  UNION "
+                  + "  SELECT NUNOTAORIG FROM TGFVAR WITH (NOLOCK) WHERE NUNOTA = ?"
+                  + ") AND PROVISAO = 'N'");
+            stmt.setBigDecimal(1, nunota);
+            stmt.setBigDecimal(2, nunota);
+            stmt.setBigDecimal(3, nunota);
+            rs = stmt.executeQuery();
+            boolean existe = rs.next();
+            LOGGER.fine("[CancelamentoHelper] possuiAdiantamentosRelacionadosComVAR NUNOTA=" + nunota + " resultado=" + existe);
+            return existe;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[CancelamentoHelper] Erro ao verificar adiantamentos com VAR para NUNOTA=" + nunota, e);
+            return false;
+        } finally {
+            fechar(rs, stmt, jdbc);
+        }
+    }
+
     public static boolean existeLigacaoVarPorNunotaOrig(BigDecimal nunota) {
         if (nunota == null) return false;
 
@@ -62,7 +102,7 @@ public class CancelamentoHelper {
         try {
             jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
-            stmt = jdbc.getPreparedStatement("SELECT TOP 1 1 FROM TGFVAR WHERE NUNOTAORIG = ?");
+            stmt = jdbc.getPreparedStatement("SELECT TOP 1 1 FROM TGFVAR WITH (NOLOCK) WHERE NUNOTAORIG = ?");
             stmt.setBigDecimal(1, nunota);
             rs = stmt.executeQuery();
             boolean existe = rs.next();
@@ -76,6 +116,11 @@ public class CancelamentoHelper {
         }
     }
 
+    /**
+     * Busca adiantamentos relacionados considerando TGFVAR.
+     * CORRECAO: Antes buscava apenas AD_NUNOTAADIANT = nunota_exata.
+     * Agora busca tambem via notas relacionadas por TGFVAR (faturamento parcial).
+     */
     private static List<BigDecimal> buscarAdiantamentosRelacionados(BigDecimal nunota) {
         List<BigDecimal> adiantamentos = new ArrayList<>();
         br.com.sankhya.jape.dao.JdbcWrapper jdbc = null;
@@ -86,13 +131,23 @@ public class CancelamentoHelper {
             jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
             stmt = jdbc.getPreparedStatement(
-                    "SELECT DISTINCT NUMNOTA FROM TGFFIN WHERE AD_NUNOTAADIANT = ? AND PROVISAO = 'N'");
+                    "SELECT DISTINCT F.NUMNOTA FROM TGFFIN F WITH (NOLOCK) "
+                  + "WHERE F.AD_NUNOTAADIANT IN ("
+                  + "  SELECT ? "
+                  + "  UNION "
+                  + "  SELECT NUNOTA FROM TGFVAR WITH (NOLOCK) WHERE NUNOTAORIG = ? "
+                  + "  UNION "
+                  + "  SELECT NUNOTAORIG FROM TGFVAR WITH (NOLOCK) WHERE NUNOTA = ?"
+                  + ") AND F.PROVISAO = 'N' AND F.DHBAIXA IS NULL");
             stmt.setBigDecimal(1, nunota);
+            stmt.setBigDecimal(2, nunota);
+            stmt.setBigDecimal(3, nunota);
             rs = stmt.executeQuery();
 
             while (rs.next()) {
                 adiantamentos.add(rs.getBigDecimal("NUMNOTA"));
             }
+            LOGGER.info("[CancelamentoHelper] Adiantamentos encontrados para NUNOTA=" + nunota + ": " + adiantamentos.size());
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "[CancelamentoHelper] Erro ao buscar adiantamentos para NUNOTA=" + nunota, e);
         } finally {

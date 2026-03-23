@@ -174,7 +174,7 @@ public class DespesaBaixaControlEvent implements EventoProgramavelJava {
             jdbc.openSession();
 
             // Buscar a RECEITA (RECDESP=1) do mesmo NUMNOTA e AD_NUNOTAADIANT
-            String sql = "SELECT NUFIN, DHBAIXA FROM TGFFIN " +
+            String sql = "SELECT NUFIN, DHBAIXA FROM TGFFIN WITH (NOLOCK) " +
                         "WHERE NUMNOTA = ? " +
                         "AND AD_NUNOTAADIANT = ? " +
                         "AND RECDESP = 1";

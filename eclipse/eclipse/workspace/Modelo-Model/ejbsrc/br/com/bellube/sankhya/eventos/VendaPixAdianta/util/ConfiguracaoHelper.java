@@ -125,7 +125,7 @@ public final class ConfiguracaoHelper {
             jdbc.openSession();
 
             if (codTipVenda != null) {
-                ps = jdbc.getPreparedStatement("SELECT TOP 1 AD_GERAADIANT FROM TGFTPV WHERE CODTIPVENDA = ? ORDER BY DHALTER DESC");
+                ps = jdbc.getPreparedStatement("SELECT TOP 1 AD_GERAADIANT FROM TGFTPV WITH (NOLOCK) WHERE CODTIPVENDA = ? ORDER BY DHALTER DESC");
                 ps.setBigDecimal(1, codTipVenda);
                 rs = ps.executeQuery();
                 if (rs.next()) {
@@ -137,7 +137,7 @@ public final class ConfiguracaoHelper {
                 ps.close(); ps = null;
             }
             if (codTipOper != null) {
-                ps = jdbc.getPreparedStatement("SELECT TOP 1 AD_GERAADIANT FROM TGFTOP WHERE CODTIPOPER = ? ORDER BY DHALTER DESC");
+                ps = jdbc.getPreparedStatement("SELECT TOP 1 AD_GERAADIANT FROM TGFTOP WITH (NOLOCK) WHERE CODTIPOPER = ? ORDER BY DHALTER DESC");
                 ps.setBigDecimal(1, codTipOper);
                 rs = ps.executeQuery();
                 if (rs.next()) {
