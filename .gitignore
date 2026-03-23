@@ -1,0 +1,82 @@
+# Build outputs
+build/
+dist/
+build-out/
+test-results/
+*.class
+
+# JDK / Runtime
+jdk*/
+wildfly/
+*.ear
+*.war
+
+# Dependencies (binary)
+*.jar
+*.zip
+*.rar
+libs/
+
+# IDE
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+eclipse/eclipse/workspace/Modelo-Model/ejbsrc/br/com/bellube/sankhya/eventos/VendaPixAdianta/LEI_DO_BEM_AUDITORIA/
+eclipse/eclipse/workspace/Modelo-Model/ejbsrc/br/com/bellube/sankhya/eventos/VendaPixAdianta/examples/
+
+# Logs
+*.log
+*.log_*
+server.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Sensitive / Config
+*.properties
+mge-ds.xml
+connectionLeakDumps/
+connectionUsageDumps/
+conn-stats/
+dml_stats/
+gc-stats/
+threads.dump
+sas-server/
+bootloader/
+
+# Scripts with credentials
+auto-configure-erp.ps1
+run-erp-tests.ps1
+validate_sql.py
+
+# Sankhya specific
+cbm-modelcore-master/
+sankhya-to-strapi-master/
+
+# Analysis docs (not needed in repo)
+ANALYSIS*.md
+ATIVIDADES_*.md
+BUILD_SCRIPT_*.md
+ANALISE_*.md
+BOLETO.txt
+AS/
+
+# Cached/generated assets with long paths
+sources/
+data_image/
+DOSSIE_*.md
+PLANO_*.md
+*.md
+!README.md
+
+# Other project artifacts
+.baserock/
+.gradle/
+.zencoder/
+DumpOracle/
+ExportJarFile-main/
+*.docx
