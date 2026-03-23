@@ -213,8 +213,9 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
             Set<BigDecimal> relacionados = coletarNunotasRelacionados(nunota);
             java.util.List<BigDecimal> lista = new java.util.ArrayList<>(relacionados);
 
+            // OTIMIZADO: TOP 1 em vez de COUNT - para de buscar ao achar o primeiro
             StringBuilder sql = new StringBuilder(
-                    "SELECT COUNT(1) AS TOTAL FROM TGFFIN WITH (NOLOCK) WHERE RECDESP = 1 AND PROVISAO = 'N' AND AD_NUNOTAADIANT IN (");
+                    "SELECT TOP 1 1 FROM TGFFIN WITH (NOLOCK) WHERE RECDESP = 1 AND PROVISAO = 'N' AND AD_NUNOTAADIANT IN (");
             for (int i = 0; i < lista.size(); i++) {
                 if (i > 0) sql.append(',');
                 sql.append('?');
@@ -231,11 +232,7 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
             if (codparc != null) stmt.setBigDecimal(idx++, codparc);
             if (codemp != null) stmt.setBigDecimal(idx++, codemp);
             rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                return rs.getInt("TOTAL") > 0;
-            }
-            return false;
+            return rs.next();
 
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "[VendaPixAdianta] Erro ao verificar adiantamento existente para NUNOTA=" + nunota, e);
