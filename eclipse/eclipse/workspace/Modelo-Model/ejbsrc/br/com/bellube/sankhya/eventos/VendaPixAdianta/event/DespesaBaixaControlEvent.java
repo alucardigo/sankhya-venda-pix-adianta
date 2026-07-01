@@ -173,11 +173,14 @@ public class DespesaBaixaControlEvent implements EventoProgramavelJava {
             jdbc = br.com.sankhya.modelcore.util.EntityFacadeFactory.getDWFFacade().getJdbcWrapper();
             jdbc.openSession();
 
-            // Buscar a RECEITA (RECDESP=1) do mesmo NUMNOTA e AD_NUNOTAADIANT
+            // Buscar a RECEITA (RECDESP=1) real (PROVISAO='N') do mesmo NUMNOTA e AD_NUNOTAADIANT.
+            // Sem o filtro PROVISAO='N' pode-se acertar um titulo provisionado e liberar
+            // indevidamente a baixa da despesa correspondente.
             String sql = "SELECT NUFIN, DHBAIXA FROM TGFFIN WITH (NOLOCK) " +
                         "WHERE NUMNOTA = ? " +
                         "AND AD_NUNOTAADIANT = ? " +
-                        "AND RECDESP = 1";
+                        "AND RECDESP = 1 " +
+                        "AND PROVISAO = 'N'";
 
             stmt = jdbc.getPreparedStatement(sql);
             stmt.setBigDecimal(1, numnota);

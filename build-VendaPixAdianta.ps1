@@ -66,8 +66,10 @@ if (-not $JavaExe) { throw "java.exe não encontrado. Verifique o JDK em $JdkHom
 $VendaPixBase = "$SrcRoot\br\com\bellube\sankhya\eventos\VendaPixAdianta"
 $JavaFiles = @(
     "$VendaPixBase\event\VendaPixAdiantaEvent.java",
-    "$VendaPixBase\async\AdiantamentoTask.java", 
+    "$VendaPixBase\event\DespesaBaixaControlEvent.java",
+    "$VendaPixBase\async\AdiantamentoTask.java",
     "$VendaPixBase\async\AsyncAdiantamentoProcessor.java",
+    "$VendaPixBase\async\ReconciliacaoScheduler.java",
     "$VendaPixBase\service\AdiantamentoService.java",
     "$VendaPixBase\util\ConfiguracaoHelper.java",
     "$VendaPixBase\util\AuditLogger.java",
@@ -79,7 +81,13 @@ $JavaFiles = @(
     "$VendaPixBase\action\SessionContextHelper.java",
     "$VendaPixBase\action\BoletoPreviewService.java",
     "$VendaPixBase\action\ImprimirBoletoAdiantamentoAction.java",
-    "$VendaPixBase\rules\RegraBaixaAdiantamentoConfirmacao.java"
+    "$VendaPixBase\action\ReconciliacaoAdiantamentoAction.java",
+    "$VendaPixBase\action\MarcarNaoPendenteAdiantamentoAction.java",
+    "$VendaPixBase\action\GerarBoletoAdiantamentoPixAction.java",
+    "$VendaPixBase\rules\RegraBaixaAdiantamentoConfirmacao.java",
+    "$VendaPixBase\service\BoletoResult.java",
+    "$VendaPixBase\service\BoletoAutoService.java",
+    "$VendaPixBase\service\NotificacaoService.java"
 )
 
 # Validate files exist

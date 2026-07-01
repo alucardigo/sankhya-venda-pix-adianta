@@ -1,6 +1,9 @@
 package br.com.bellube.sankhya.eventos.VendaPixAdianta.async;
 
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.service.AdiantamentoService;
+import br.com.bellube.sankhya.eventos.VendaPixAdianta.service.BoletoAutoService;
+import br.com.bellube.sankhya.eventos.VendaPixAdianta.service.BoletoResult;
+import br.com.bellube.sankhya.eventos.VendaPixAdianta.service.NotificacaoService;
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.util.AuditLogger;
 import br.com.sankhya.jape.util.JapeSessionContext;
 
@@ -31,6 +34,10 @@ public class AsyncAdiantamentoProcessor {
     private static final Random RANDOM = new Random();
 
     private static final ExecutorService executorService = Executors.newFixedThreadPool(NUM_THREADS);
+    // Pool SEPARADO para geracao de boleto - isola falhas da API bancaria
+    // externa (Itau/VendaMais) do pool principal de criacao de adiantamento.
+    // Se o boleto travar/demorar, NAO bloqueia a fila de adiantamentos.
+    private static final ExecutorService boletoExecutor = Executors.newFixedThreadPool(2);
     private static final BlockingQueue<AdiantamentoTask> taskQueue = new LinkedBlockingQueue<>();
     private static final Set<BigDecimal> pendingNunotas = ConcurrentHashMap.newKeySet();
 
@@ -55,12 +62,13 @@ public class AsyncAdiantamentoProcessor {
 
         BigDecimal nunota = task.nunota();
 
-        if (pendingNunotas.contains(nunota)) {
+        // Guard atomico: Set#add retorna false se ja presente.
+        // Evita janela de corrida entre contains() e add() que permitia
+        // dois submits simultaneos da mesma NUNOTA passarem o check.
+        if (!pendingNunotas.add(nunota)) {
             LOGGER.info("[VENDAPIX-ASYNC] NUNOTA=" + nunota + " ja pendente - ignorada");
             return;
         }
-
-        pendingNunotas.add(nunota);
 
         if (taskQueue.offer(task)) {
             totalSubmitted.incrementAndGet();
@@ -85,6 +93,7 @@ public class AsyncAdiantamentoProcessor {
     public static void shutdown() {
         LOGGER.info("[VENDAPIX-ASYNC] Finalizando processador");
         executorService.shutdown();
+        boletoExecutor.shutdown();
     }
 
     // --- Worker ---
@@ -129,9 +138,10 @@ public class AsyncAdiantamentoProcessor {
                         session = br.com.sankhya.jape.core.JapeSession.open();
 
                         ContextState ctx = aplicarContexto(task.authInfo());
+                        final BigDecimal[] numNotaHolder = new BigDecimal[1];
                         try {
                             session.execWithTX(() -> {
-                                new AdiantamentoService().criarAdiantamentoParaVenda(task);
+                                numNotaHolder[0] = new AdiantamentoService().criarAdiantamentoParaVenda(task);
                             });
                         } finally {
                             restaurarContexto(ctx);
@@ -140,6 +150,21 @@ public class AsyncAdiantamentoProcessor {
                         totalProcessed.incrementAndGet();
                         long duracao = System.currentTimeMillis() - inicio;
                         LOGGER.info("[VENDAPIX-ASYNC] Worker-" + id + " OK NUNOTA=" + nunota + " em " + duracao + "ms");
+
+                        // === FASE 2: Gerar boleto automaticamente EM OUTRO POOL ===
+                        // IMPORTANTE: Submit em pool separado para NAO travar este worker
+                        // caso a API bancaria (Itau/VendaMais) esteja lenta ou indisponivel.
+                        // Falha no boleto NAO deve reverter o adiantamento (ja commitado).
+                        final BigDecimal numNotaFinal = numNotaHolder[0];
+                        final int workerId = id;
+                        try {
+                            boletoExecutor.submit(() -> gerarBoletoAutomatico(task, numNotaFinal, workerId));
+                        } catch (Exception submitEx) {
+                            LOGGER.log(Level.WARNING, "[VENDAPIX-ASYNC] Worker-" + id
+                                    + " Falha ao submeter boleto para pool separado NUNOTA=" + nunota
+                                    + " (adiantamento ja criado OK)", submitEx);
+                        }
+
                         return;
 
                     } catch (Exception e) {
@@ -180,6 +205,52 @@ public class AsyncAdiantamentoProcessor {
             long delay = Math.min(BASE_RETRY_DELAY_MS * (1L << (tentativa - 1)), MAX_RETRY_DELAY_MS);
             long jitter = (long) (delay * 0.25 * (RANDOM.nextDouble() - 0.5));
             return Math.max(100, delay + jitter);
+        }
+    }
+
+    // --- Geracao automatica de boleto (pos-adiantamento) ---
+
+    private static void gerarBoletoAutomatico(AdiantamentoTask task, BigDecimal numNotaAdiant, int workerId) {
+        if (numNotaAdiant == null) {
+            LOGGER.warning("[VENDAPIX-ASYNC] Worker-" + workerId + " NUMNOTA nulo - boleto nao gerado NUNOTA=" + task.nunota());
+            return;
+        }
+
+        br.com.sankhya.jape.core.JapeSession.SessionHandle boletoSession = null;
+        ContextState boletoCtx = null;
+        try {
+            LOGGER.info("[VENDAPIX-ASYNC] Worker-" + workerId + " Iniciando boleto automatico NUNOTA=" + task.nunota());
+            boletoSession = br.com.sankhya.jape.core.JapeSession.open();
+            boletoCtx = aplicarContexto(task.authInfo());
+
+            BoletoAutoService boletoService = new BoletoAutoService();
+            BoletoResult resultado = boletoService.gerarBoletoAutomatico(
+                    task.nunota(), numNotaAdiant, task.codemp());
+
+            if (resultado.isSuccess()) {
+                LOGGER.info("[VENDAPIX-ASYNC] Worker-" + workerId + " Boleto OK " + resultado);
+
+                // Notificar vendedor e parceiro
+                try {
+                    new NotificacaoService().notificarBoletoGerado(
+                            task.nunota(), task.codparc(), numNotaAdiant, resultado);
+                } catch (Exception ne) {
+                    LOGGER.log(Level.WARNING, "[VENDAPIX-ASYNC] Notificacao falhou (boleto gerado OK)", ne);
+                }
+            } else {
+                LOGGER.warning("[VENDAPIX-ASYNC] Worker-" + workerId + " Boleto FALHOU: " + resultado.getErrorMessage()
+                        + " - Boleto pode ser emitido manualmente");
+                AuditLogger.logError(task.nunota(),
+                        "BOLETO_AUTO_FALHA: " + resultado.getErrorMessage(), null);
+            }
+
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[VENDAPIX-ASYNC] Worker-" + workerId
+                    + " Erro na geracao de boleto NUNOTA=" + task.nunota()
+                    + " (adiantamento ja criado OK)", e);
+        } finally {
+            if (boletoCtx != null) restaurarContexto(boletoCtx);
+            fecharSessao(boletoSession);
         }
     }
 

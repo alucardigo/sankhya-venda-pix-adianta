@@ -41,10 +41,12 @@ public class BoletoRepository {
 
         // Query corrigida: busca diretamente pela ligação AD_NUNOTAADIANT
         // que é criada pelo AdiantamentoService ao gerar o adiantamento PIX
+        // Filtro PROVISAO='N' evita retornar titulo provisionado (causaria NUMNOTA errado na UI).
         String sql = "SELECT TOP 1 " + COL_NUMNOTA + " " +
                 "FROM " + TABLE_TGFFIN + " " +
                 "WHERE " + COL_AD_NUNOTAADIANT + " = ? " +
                 "AND " + COL_RECDESP + " = " + RECDESP_RECEITA + " " +
+                "AND " + COL_PROVISAO + " = " + PROVISAO_REAL + " " +
                 "ORDER BY " + COL_NUFIN + " DESC";
 
         LOGGER.info(LOG_PREFIX + "Buscando adiantamento para NUNOTA=" + nunotaVenda + 
@@ -61,11 +63,13 @@ public class BoletoRepository {
                     " (verifique se AD_NUNOTAADIANT esta preenchido na TGFFIN). Tentando fallback por NUNOTA.");
         }
 
-        // Fallback: tenta localizar boleto diretamente pelos titulos da propria nota
+        // Fallback: tenta localizar boleto diretamente pelos titulos da propria nota.
+        // Filtro PROVISAO='N' evita retornar titulo provisionado.
         String sqlFallback = "SELECT TOP 1 " + COL_NUMNOTA + " " +
                 "FROM " + TABLE_TGFFIN + " " +
                 "WHERE " + COL_NUNOTA + " = ? " +
                 "AND " + COL_RECDESP + " = " + RECDESP_RECEITA + " " +
+                "AND " + COL_PROVISAO + " = " + PROVISAO_REAL + " " +
                 "ORDER BY " + COL_NUFIN + " DESC";
 
         BigDecimal fallback = executeSingleBigDecimalQuery(sqlFallback, nunotaVenda);
@@ -90,10 +94,12 @@ public class BoletoRepository {
             return null;
         }
 
+        // PROVISAO='N' para nao pegar titulo provisionado.
         String sql = "SELECT TOP 1 " + COL_NUFIN + " " +
                 "FROM " + TABLE_TGFFIN + " " +
                 "WHERE " + COL_NUMNOTA + " = ? " +
                 "AND " + COL_RECDESP + " = " + RECDESP_RECEITA + " " +
+                "AND " + COL_PROVISAO + " = " + PROVISAO_REAL + " " +
                 "ORDER BY " + COL_NUFIN + " DESC";
 
         return executeSingleBigDecimalQuery(sql, numnota);

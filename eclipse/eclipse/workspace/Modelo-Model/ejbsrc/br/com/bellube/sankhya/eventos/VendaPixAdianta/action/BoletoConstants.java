@@ -89,6 +89,10 @@ public final class BoletoConstants {
     // RECDESP Values
     public static final int RECDESP_RECEITA = 1; // Receita (boleto)
 
+    // PROVISAO - usado para filtrar titulos reais (nao provisionados)
+    public static final String COL_PROVISAO = "PROVISAO";
+    public static final String PROVISAO_REAL = "'N'";
+
 
     private BoletoConstants() {
         throw new AssertionError("Constants class cannot be instantiated");

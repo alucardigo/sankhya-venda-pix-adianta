@@ -2,6 +2,7 @@ package br.com.bellube.sankhya.eventos.VendaPixAdianta.event;
 
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.async.AdiantamentoTask;
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.async.AsyncAdiantamentoProcessor;
+import br.com.bellube.sankhya.eventos.VendaPixAdianta.async.ReconciliacaoScheduler;
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.util.CancelamentoHelper;
 import br.com.bellube.sankhya.eventos.VendaPixAdianta.util.ConfiguracaoHelper;
 import br.com.sankhya.extensions.eventoprogramavel.EventoProgramavelJava;
@@ -23,6 +24,26 @@ import java.util.logging.Level;
 public class VendaPixAdiantaEvent implements EventoProgramavelJava {
 
     private static final Logger LOGGER = Logger.getLogger("VendaPixAdiantaEvent");
+
+    /** Marcador de versao - facilita identificar se o JAR atual em produção
+     * eh o ultimo compilado. Aparece logo no startup. Atualizar a cada release. */
+    private static final String BUILD_VERSION = "2026-06-26-BOTAO-PIX-AUTHINFO-V16.3";
+
+    static {
+        // Log de startup SEMPRE em INFO - facilita confirmar deploy
+        LOGGER.info("[VendaPixAdianta] *** Classloader carregou VendaPixAdiantaEvent - BUILD=" + BUILD_VERSION + " ***");
+
+        // Forca o carregamento e inicializacao do ReconciliacaoScheduler
+        // (static block dele dispara o ScheduledExecutorService embedded).
+        // Como o Sankhya carrega esta classe no startup quando registra o
+        // evento, garante que o scheduler suba junto.
+        try {
+            Class.forName(ReconciliacaoScheduler.class.getName());
+            LOGGER.info("[VendaPixAdianta] ReconciliacaoScheduler classloader carregado com sucesso (BUILD=" + BUILD_VERSION + ")");
+        } catch (Throwable t) {
+            LOGGER.log(Level.WARNING, "[VendaPixAdianta] Falha ao iniciar ReconciliacaoScheduler", t);
+        }
+    }
 
     @Override
     public void afterUpdate(PersistenceEvent event) throws Exception {
@@ -64,20 +85,24 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
                 if (tratarMudancaPendente(event, cabVO, pendenteAtual, nunota)) return;
             }
 
-            // 3) Validar se eh PIX
+            // 3) Fallback universal: se PENDENTE atual eh 'N' e existem adiantamentos
+            //    sem vinculo TGFVAR (nao virou venda) -> cancela, independente de
+            //    isPixConfirmado. Cobre caso em que CODTIPVENDA/CODTIPOPER foram
+            //    alterados antes do aborto e o pedido nao vira mais PIX.
+            if ("N".equals(pendenteAtual)) {
+                boolean existeLigacaoVar = CancelamentoHelper.existeLigacaoVarPorNunotaOrig(nunota);
+                boolean possuiAdiants = CancelamentoHelper.possuiAdiantamentosRelacionadosComVAR(nunota);
+                if (!existeLigacaoVar && possuiAdiants) {
+                    LOGGER.info("[VendaPixAdianta] Fallback universal PENDENTE=N sem TGFVAR - cancelando - NUNOTA=" + nunota);
+                    cancelarAdiantamentosSemVinculo(nunota, "fallback universal PENDENTE=N");
+                    return;
+                }
+            }
+
+            // 4) Validar se eh PIX
             if (!isPixConfirmado(cabVO)) {
                 LOGGER.info("[VendaPixAdianta] Nota nao qualifica para fluxo PIX - NUNOTA=" + nunota);
                 return;
-            }
-
-            // 4) Fallback: PENDENTE=N sem vinculo TGFVAR com adiantamentos existentes
-            if ("N".equals(pendenteAtual)) {
-                boolean existeLigacaoVar = CancelamentoHelper.existeLigacaoVarPorNunotaOrig(nunota);
-                boolean possuiAdiants = CancelamentoHelper.possuiAdiantamentosRelacionados(nunota);
-                if (!existeLigacaoVar && possuiAdiants) {
-                    cancelarAdiantamentosSemVinculo(nunota, "fallback PENDENTE=N");
-                    return;
-                }
             }
 
             // 5) Criar adiantamento: exige campo NUMNOTA alterado
@@ -194,8 +219,13 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
 
     private void cancelarAdiantamentosSemVinculo(BigDecimal nunota, String motivo) {
         try {
-            CancelamentoHelper.cancelarAdiantamentosPorNota(nunota);
-            LOGGER.info("[VendaPixAdianta] Adiantamentos cancelados (" + motivo + ") - NUNOTA=" + nunota);
+            boolean tudoOk = CancelamentoHelper.cancelarAdiantamentosPorNota(nunota);
+            if (tudoOk) {
+                LOGGER.info("[VendaPixAdianta] Adiantamentos cancelados OK (" + motivo + ") - NUNOTA=" + nunota);
+            } else {
+                LOGGER.warning("[VendaPixAdianta] Adiantamentos NAO foram totalmente cancelados (" + motivo
+                        + ") - NUNOTA=" + nunota + " - veja logs [CancelamentoHelper] acima");
+            }
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "[VendaPixAdianta] Falha ao cancelar adiantamentos (" + motivo + ") - NUNOTA=" + nunota, e);
         }
@@ -294,6 +324,42 @@ public class VendaPixAdiantaEvent implements EventoProgramavelJava {
     @Override public void beforeUpdate(PersistenceEvent event) throws Exception {}
     @Override public void beforeDelete(PersistenceEvent event) throws Exception {}
     @Override public void afterInsert(PersistenceEvent event) throws Exception {}
-    @Override public void afterDelete(PersistenceEvent event) throws Exception {}
     @Override public void beforeCommit(TransactionContext ctx) throws Exception {}
+
+    /**
+     * Se o pedido (TGFCAB) for DELETADO com adiantamento(s) vivo(s) e sem TGFVAR,
+     * cancela os adiantamentos relacionados para evitar orfaos em TGFFIN.
+     */
+    @Override
+    public void afterDelete(PersistenceEvent event) throws Exception {
+        if (!"CabecalhoNota".equals(event.getEntity().getName())) return;
+
+        BigDecimal nunota = null;
+        try {
+            DynamicVO cabVO = (DynamicVO) event.getVo();
+            if (cabVO == null) return;
+            nunota = cabVO.asBigDecimal("NUNOTA");
+            if (nunota == null) return;
+
+            LOGGER.info("[VendaPixAdianta] [afterDelete] NUNOTA=" + nunota);
+
+            boolean possuiAdiantamentos = CancelamentoHelper.possuiAdiantamentosRelacionadosComVAR(nunota);
+            if (!possuiAdiantamentos) {
+                LOGGER.info("[VendaPixAdianta] [afterDelete] Nenhum adiantamento associado - NUNOTA=" + nunota);
+                return;
+            }
+
+            boolean existeLigacaoVar = CancelamentoHelper.existeLigacaoVarPorNunotaOrig(nunota);
+            if (existeLigacaoVar) {
+                LOGGER.info("[VendaPixAdianta] [afterDelete] Possui vinculo TGFVAR - adiantamentos mantidos - NUNOTA=" + nunota);
+                return;
+            }
+
+            LOGGER.info("[VendaPixAdianta] [afterDelete] Pedido deletado sem TGFVAR - cancelando adiantamentos - NUNOTA=" + nunota);
+            cancelarAdiantamentosSemVinculo(nunota, "afterDelete sem vinculo TGFVAR");
+
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "[VendaPixAdianta] Erro em afterDelete - NUNOTA=" + nunota + ": " + e.getMessage(), e);
+        }
+    }
 }
